@@ -13,14 +13,15 @@ az config set extension.use_dynamic_install=yes_without_prompt --only-show-error
 az extension add --name application-insights --only-show-errors >/dev/null 2>&1 || true
 
 # --- Configuration -----------------------------------------------------------
-SUFFIX="${SUFFIX:-$(openssl rand -hex 4)}"
+# SUFFIX="${SUFFIX:-$(openssl rand -hex 4)}"
+SUFFIX="2b4b444d"
 RESOURCE_GROUP="${RESOURCE_GROUP:-foundry-hackathon-rg-$SUFFIX}"
-LOCATION="${LOCATION:-swedencentral}"
+LOCATION="${LOCATION:-westeurope}"
 FOUNDRY_RESOURCE_NAME="${FOUNDRY_RESOURCE_NAME:-foundry-hack-$SUFFIX}"
 PROJECT_NAME="${PROJECT_NAME:-claims-project}"
-MODEL_DEPLOYMENT_NAME="${MODEL_DEPLOYMENT_NAME:-gpt-5.4}"
-MODEL_NAME="${MODEL_NAME:-gpt-5.4}"
-MODEL_VERSION="${MODEL_VERSION:-2026-03-05}"
+MODEL_DEPLOYMENT_NAME="${MODEL_DEPLOYMENT_NAME:-Phi-4-mini-instruct}"
+MODEL_NAME="${MODEL_NAME:-Phi-4-mini-instruct}"
+MODEL_VERSION="${MODEL_VERSION:-1}"
 LOG_ANALYTICS_NAME="${LOG_ANALYTICS_NAME:-foundry-hack-logs-$SUFFIX}"
 APP_INSIGHTS_NAME="${APP_INSIGHTS_NAME:-foundry-hack-insights-$SUFFIX}"
 
@@ -82,7 +83,8 @@ for i in $(seq 1 36); do
     PROV_STATE=$(az cognitiveservices account show \
         --name "$FOUNDRY_RESOURCE_NAME" \
         --resource-group "$RESOURCE_GROUP" \
-        --query "properties.provisioningState" -o tsv 2>/dev/null || echo "Pending")
+        --query "properties.provisioningState" -o tsv 2>/dev/null | tr -d '\r' || echo "Pending")
+    echo $PROV_STATE
     if [ "$PROV_STATE" = "Succeeded" ]; then
         echo "    ✓ Provisioning complete."
         break
@@ -100,21 +102,33 @@ FOUNDRY_RESOURCE_ID=$(az cognitiveservices account show \
     --resource-group "$RESOURCE_GROUP" \
     --query id -o tsv)
 
-az resource update \
-    --ids "$FOUNDRY_RESOURCE_ID" \
-    --set properties.disableLocalAuth=false \
-    --output none || true
+# echo ">>> Enabling API key authentication (if not already enabled)..."
+# az resource update \
+#     --ids "$FOUNDRY_RESOURCE_ID" \
+#     --set properties.disableLocalAuth=false \
+#     --output none || true
 
-az resource update \
-    --ids "$FOUNDRY_RESOURCE_ID" \
-    --set properties.allowProjectManagement=true \
-    --output none
+# echo ">>> Enabling project management (if not already enabled)..."
+# az resource update \
+#     --ids "$FOUNDRY_RESOURCE_ID" \
+#     --set properties.allowProjectManagement=true \
+#     --output none
 
+echo ">>> Updating Foundry account properties (disableLocalAuth=false, allowProjectManagement=true)..."
+az cognitiveservices account update \
+    --name "$FOUNDRY_RESOURCE_NAME" \
+    --resource-group "$RESOURCE_GROUP" \
+    --disable-local-auth false \
+    --allow-project-management true \
+    --output none || echo "⚠️  Could not update Foundry account properties (may already be set)."
+
+echo ">>> Enabling system-assigned managed identity (if not already enabled)..."
 DISABLE_LOCAL_AUTH=$(az cognitiveservices account show \
     --name "$FOUNDRY_RESOURCE_NAME" \
     --resource-group "$RESOURCE_GROUP" \
     --query properties.disableLocalAuth -o tsv)
 
+echo ">>> Foundry account disableLocalAuth: $DISABLE_LOCAL_AUTH"
 if [ "$DISABLE_LOCAL_AUTH" = "true" ]; then
     echo "⚠️  API key authentication is disabled by Azure Policy on this tenant."
     echo "   The deployment will continue — use DefaultAzureCredential (Entra ID) in your code."
@@ -136,8 +150,8 @@ az cognitiveservices account deployment create \
     --deployment-name "$MODEL_DEPLOYMENT_NAME" \
     --model-name "$MODEL_NAME" \
     --model-version "$MODEL_VERSION" \
-    --model-format OpenAI \
-    --sku-capacity 10 \
+    --model-format Microsoft \
+    --sku-capacity 1 \
     --sku-name GlobalStandard \
     --output none
 
@@ -155,24 +169,28 @@ LOG_ANALYTICS_ID=$(az monitor log-analytics workspace show \
     --query id -o tsv)
 
 # --- Application Insights ----------------------------------------------------
-echo ">>> Creating Application Insights (linked to Log Analytics)..."
-az monitor app-insights component create \
-    --app "$APP_INSIGHTS_NAME" \
-    --resource-group "$RESOURCE_GROUP" \
-    --location "$LOCATION" \
-    --workspace "$LOG_ANALYTICS_ID" \
-    --output none
+# echo ">>> Creating Application Insights (linked to Log Analytics)..."
+# az monitor app-insights component create \
+#     --app "$APP_INSIGHTS_NAME" \
+#     --resource-group "$RESOURCE_GROUP" \
+#     --location "$LOCATION" \
+#     --kind web \
+#     --workspace "$LOG_ANALYTICS_ID" \
+#     --output none
 
+echo ">>> Enabling system-assigned managed identity for Application Insights..."
 APP_INSIGHTS_CONN_STRING=$(az monitor app-insights component show \
     --app "$APP_INSIGHTS_NAME" \
     --resource-group "$RESOURCE_GROUP" \
     --query connectionString -o tsv)
 
+echo ">>> Application Insights connection string: $APP_INSIGHTS_CONN_STRING"
 APP_INSIGHTS_INSTRUMENTATION_KEY=$(az monitor app-insights component show \
     --app "$APP_INSIGHTS_NAME" \
     --resource-group "$RESOURCE_GROUP" \
     --query instrumentationKey -o tsv)
 
+echo ">>> Application Insights instrumentation key: $APP_INSIGHTS_INSTRUMENTATION_KEY"
 APP_INSIGHTS_RESOURCE_ID=$(az monitor app-insights component show \
     --app "$APP_INSIGHTS_NAME" \
     --resource-group "$RESOURCE_GROUP" \
